@@ -24,6 +24,8 @@ final class FireworksBrain {
     /// Serverless Fireworks models that can see screenshots and call tools, as (id, display name).
     private(set) var models: [(id: String, name: String)] = []
     private var loadingModels: Task<Void, Never>?
+    /// Models that refused "reasoning_effort: none" (thinking-only ones): they get asked without it.
+    private var mustThink: Set<String> = []
 
     static let base = "https://api.fireworks.ai/inference/v1"
 
@@ -195,13 +197,22 @@ final class FireworksBrain {
     private func complete() async throws -> Reply {
         guard let key = Keychain.get(.fireworks) else { throw BrainError.noKey }
         let model = await ensureModel()
+        do {
+            return try await complete(model: model, key: key, think: mustThink.contains(model))
+        } catch BrainError.thinkingOnly {
+            mustThink.insert(model)
+            return try await complete(model: model, key: key, think: true)
+        }
+    }
+
+    private func complete(model: String, key: String, think: Bool) async throws -> Reply {
         var request = URLRequest(url: URL(string: Self.base + "/chat/completions")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 90
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "model": model,
             "messages": Self.withLatestScreenshotOnly(messages),
             "tools": Self.tools,
@@ -209,14 +220,21 @@ final class FireworksBrain {
             "stream": true,
             "max_tokens": 700,
             "temperature": 0.6,
-        ] as [String: Any])
+        ]
+        // These models all think before answering; for one-line replies that only adds seconds.
+        if !think { body["reasoning_effort"] = "none" }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
             var body = ""
             for try await line in bytes.lines { body += line; if body.count > 400 { break } }
-            throw BrainError.failed("\(code) \(Self.errorMessage(body))")
+            let message = Self.errorMessage(body)
+            if code == 400, !think, message.localizedCaseInsensitiveContains("think") || message.localizedCaseInsensitiveContains("reasoning") {
+                throw BrainError.thinkingOnly
+            }
+            throw BrainError.failed("\(code) \(message)")
         }
 
         var raw = ""
@@ -259,10 +277,11 @@ final class FireworksBrain {
     }
 
     enum BrainError: LocalizedError {
-        case noKey, failed(String)
+        case noKey, thinkingOnly, failed(String)
         var errorDescription: String? {
             switch self {
             case .noKey: return "I need a Fireworks API key. Add one under Fireworks Key in the menu bar."
+            case .thinkingOnly: return "This model can't answer without thinking first."
             case .failed(let why): return why
             }
         }
@@ -319,7 +338,7 @@ final class FireworksBrain {
 
         Most important rule: when a request needs a tool, call the tool FIRST with no words before it. Never \
         write things like "one moment", "sure", "okay" or "let me". Reply only after, in one short line of plain \
-        text. No lists, no markdown, no quotation marks around your reply, never mention ids or coordinates.
+        text. No lists, no markdown, no emoji, no quotation marks around your reply, never mention ids or coordinates.
 
         Point whenever you can. If the question is about anything on the screen ("what's this?", "what does this \
         mean?"), call look_at_screen, then point_at (or point_at_spot) the thing you're talking about, then give \
@@ -359,11 +378,12 @@ final class FireworksBrain {
     }
 
     /// A safe default if the model list can't be read: a serverless model that takes images.
-    static let fallbackModel = "accounts/fireworks/models/glm-5p3-flash"
+    static let fallbackModel = "accounts/fireworks/models/qwen3p8-max"
 
     /// Strong, fast, multimodal tool-callers first.
     private static func preferred(_ models: [(id: String, name: String)]) -> String? {
-        let order = ["kimi-k2p7", "kimi-k2p6", "qwen3p7-plus", "glm-5p3", "qwen3-vl-235b-a22b-instruct", "qwen3p6", "kimi", "qwen3-vl", "glm", "gemma", "llama"]
+        // From a side-by-side run (October 2026): all call tools well; these answer fastest with thinking off.
+        let order = ["qwen3p8-max", "deepseek-v4p1-flash", "kimi-k3", "ember-1", "qwen3", "kimi", "deepseek", "glm", "gemma", "llama"]
         for hint in order {
             if let match = models.first(where: { $0.id.contains(hint) && !$0.id.contains("thinking") && !$0.id.contains("code") }) {
                 return match.id
