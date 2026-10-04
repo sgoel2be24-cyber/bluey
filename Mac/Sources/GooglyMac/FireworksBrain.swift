@@ -22,6 +22,12 @@ final class FireworksBrain {
     private var screen: Task<(text: String, image: String?), Never>?
     private var sleepAfterReply = false
     private(set) var active = false
+    /// A hands-free question that came in while his session was still starting.
+    private var queuedQuestion: String?
+    /// Asked the phone to wake him (heard "Hey Bluey" while he was asleep).
+    private var wakingSince: Double?
+    /// How long after his reply you can just keep talking.
+    private static let followUpWindow = 8.0
 
     /// Serverless Fireworks models that can see screenshots and call tools, as (id, display name).
     private(set) var models: [(id: String, name: String)] = []
@@ -34,6 +40,53 @@ final class FireworksBrain {
     init(host: RealtimeHost) {
         self.host = host
         ears.onHeard = { [weak self] text in self?.heard(text) }
+        ears.onWake = { [weak self] in self?.wakeHeard() }
+        ears.onQuestion = { [weak self] question in self?.handsFreeQuestion(question) }
+    }
+
+    // MARK: "Hey Bluey"
+
+    /// Hands-free is on, Fireworks is his brain, and this Mac can recognize speech without sending it anywhere.
+    var handsFreeReady: Bool {
+        Settings.shared.brain == .fireworks && Settings.shared.heyBluey && ears.onDevice
+    }
+
+    /// While he's asleep, listens for "Hey Bluey" on the Mac's mic (on-device; nothing else is kept).
+    /// Called at launch and whenever the settings change. Needs the mic and speech permissions already given.
+    func listenForWakeWord() {
+        guard !active else { ears.handsFree = Settings.shared.heyBluey; return }
+        guard handsFreeReady, MacEars.permitted, Keychain.get(.fireworks) != nil else {
+            ears.handsFree = false
+            ears.stop()
+            return
+        }
+        ears.handsFree = true
+        ears.wakeOnly = true
+        try? ears.start()
+    }
+
+    /// Heard "Hey Bluey" (or a follow-up started).
+    private func wakeHeard() {
+        // Look while they're still talking, so the screen is ready when the question is.
+        screen = Task { [host] in await host.lookNow() }
+        if active {
+            toPhone?(Packet(command: "earsOpen", text: "wake"))
+        } else if wakingSince.map({ CACurrentMediaTime() - $0 > 10 }) ?? true {
+            // Asleep: the phone starts the session (as if you'd double tapped), then this question gets answered.
+            wakingSince = CACurrentMediaTime()
+            toPhone?(Packet(command: "wake"))
+        }
+    }
+
+    private func handsFreeQuestion(_ question: String) {
+        if active {
+            answer(question)
+        } else {
+            queuedQuestion = question  // the session is still starting
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                if self?.active == false { self?.queuedQuestion = nil }
+            }
+        }
     }
 
     // MARK: Session
@@ -47,6 +100,9 @@ final class FireworksBrain {
         MacEars.requestPermissions { [weak self] problem in
             guard let self else { return }
             if let problem { done(problem); return }
+            // Already listening for "Hey Bluey": keep going, so a question in progress isn't lost.
+            self.ears.handsFree = Settings.shared.heyBluey
+            self.ears.wakeOnly = false
             do {
                 try self.ears.start()
             } catch {
@@ -54,18 +110,28 @@ final class FireworksBrain {
                 return
             }
             self.active = true
+            self.wakingSince = nil
             self.messages = [["role": "system", "content": Self.instructions]]
             self.overheard = []
             self.sleepAfterReply = false
             done(nil)
             Task { await self.ensureModel() }
+            if let question = self.queuedQuestion {
+                self.queuedQuestion = nil
+                self.answer(question)
+            }
         }
     }
 
     func end() {
         guard active else { return }
         active = false
-        ears.stop()
+        ears.followUpUntil = 0
+        if handsFreeReady {
+            ears.wakeOnly = true  // back to waiting for "Hey Bluey"
+        } else {
+            ears.stop()
+        }
         thinking?.cancel()
         thinking = nil
         screen = nil
@@ -203,6 +269,14 @@ final class FireworksBrain {
         if sleepAfterReply {
             sleepAfterReply = false
             toPhone?(Packet(command: "sleep"))
+        } else if ears.handsFree {
+            // A moment to follow up without "Hey Bluey".
+            ears.followUpUntil = CACurrentMediaTime() + Self.followUpWindow
+            toPhone?(Packet(command: "earsOpen", text: "followUp"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.followUpWindow) { [weak self] in
+                guard let self, self.active, CACurrentMediaTime() >= self.ears.followUpUntil else { return }
+                self.toPhone?(Packet(command: "earsClosed"))
+            }
         }
     }
 
@@ -413,7 +487,8 @@ final class FireworksBrain {
         var guide = """
         How the conversation works: you can hear the user the whole time. What they say reaches you as text. \
         Lines under "Overheard" are background context: never reply to them on their own. You only reply when \
-        the user holds the phone screen to ask you something, marked "Question:". Answer that, using the earlier \
+        the user asks you something (by holding the phone, saying "Hey Bluey", or following up right after your \
+        reply), marked "Question:". Answer that, using the earlier \
         talk as context. Each question comes with the screen as it was when they asked: the frontmost app, its \
         controls (C ids), its text (lines L#, words W#) with positions on a 0-1000 grid, where their mouse is, and \
         a screenshot.

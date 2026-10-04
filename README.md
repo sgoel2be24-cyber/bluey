@@ -10,6 +10,8 @@ How it works: the phone runs an OpenAI Realtime session (`gpt-realtime-2.1`, tex
 
 **Fireworks instead of OpenAI:** pick **Brain › Fireworks** in the menu bar and add your key under **Fireworks Key…**. Fireworks has no realtime voice or speech-to-text (its audio APIs were retired in June 2026), so in this mode the Mac does the listening with Apple's speech recognition (on-device, through the Mac's microphone) and a Fireworks model that can see screenshots and call tools does the thinking. Pick the model under **Fireworks Model** (Automatic picks the best one available). The phone stays his face: hold to ask, chirps and saved transcripts all work the same. Web research still needs an OpenAI key, so it's only offered when one is saved too. The Mac asks for Microphone and Speech Recognition access the first time he wakes up.
 
+**Hands-free (Fireworks):** say **"Hey Bluey, …"** and he wakes up, takes the rest of the sentence as your question (a short pause ends it), looks at the screen and answers, with no tapping. For about 8 seconds after each reply you can just keep talking to follow up; after that he waits for "Hey Bluey" again. While he's asleep the Mac's mic listens only for "Hey Bluey", with Apple's on-device speech recognition, and nothing else is kept or sent anywhere (it's off if this Mac can't recognize your language on-device). Switch it off with **Listen for "Hey Bluey"** in the menu bar. Holding the phone still works too.
+
 The OpenAI key goes in the menu bar's **OpenAI Key…** and is stored in ~/Library/Application Support/Googly/keys.json (private to your user), never in this repo.
 
 ## Mac menu bar app

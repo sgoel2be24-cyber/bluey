@@ -61,6 +61,12 @@ final class Settings {
         set { defaults.set(newValue.rawValue, forKey: "brain"); onChange?() }
     }
 
+    /// Hands-free (Fireworks): "Hey Bluey" wakes him and asks, and you can follow up right after he answers.
+    var heyBluey: Bool {
+        get { defaults.object(forKey: "heyBluey") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "heyBluey"); onChange?() }
+    }
+
     /// The Fireworks model picked in the menu (nil: pick the best one that can see and use tools).
     var fireworksModel: String? {
         get { defaults.string(forKey: "fireworksModel").flatMap { $0.isEmpty ? nil : $0 } }

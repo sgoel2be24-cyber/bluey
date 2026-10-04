@@ -40,7 +40,9 @@ final class RealtimeHost {
                     reply(Packet(command: "realtimeToken", callID: packet.callID))
                     self?.showCaption(problem, for: 8)
                 } else {
-                    reply(Packet(command: "macBrain", callID: packet.callID))
+                    // "handsFree" tells the phone it can say "Hey Bluey" instead of holding.
+                    reply(Packet(command: "macBrain", callID: packet.callID,
+                                 text: self?.brain.handsFreeReady == true ? "handsFree" : nil))
                 }
             }
         case "askStart":

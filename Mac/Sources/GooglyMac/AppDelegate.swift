@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.onRequest = { [weak self] packet, reply in self?.host.handle(packet, reply: reply) }
         host.brain.toPhone = { [weak self] packet in self?.server.broadcast(packet) }
         server.start()
+        host.brain.listenForWakeWord()
         host.onChange = { [weak self] in self?.refreshIcon() }
 
         // ⌥Space wakes him up or puts him back to sleep (same as double tapping him on the phone).
@@ -262,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Keychain.set(.fireworks, key)
         host.brain.resetModels()
         Task { await host.brain.loadModels() }
+        host.brain.listenForWakeWord()
     }
 
     @objc private func setBrain(_ item: NSMenuItem) {
@@ -269,6 +271,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.brain = brain
         if brain == .fireworks, Keychain.get(.fireworks) == nil { editFireworksKey() }
         if brain == .openai, Keychain.get(.openai) == nil { editKeys() }
+        restartIfAwake()
+        host.brain.listenForWakeWord()
+    }
+
+    @objc private func toggleHeyBluey() {
+        settings.heyBluey.toggle()
+        if settings.heyBluey, !MacEars.permitted {
+            // Asks for the mic and speech recognition now, so it can listen while he's asleep.
+            MacEars.requestPermissions { [weak self] _ in self?.host.brain.listenForWakeWord() }
+        } else {
+            host.brain.listenForWakeWord()
+        }
         restartIfAwake()
     }
 
@@ -355,6 +369,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(submenu("Brain: \(settings.brain == .fireworks ? "Fireworks" : "OpenAI")", brainMenu))
         if settings.brain == .fireworks {
+            let hands = item("Listen for “Hey Bluey”", #selector(toggleHeyBluey))
+            hands.state = settings.heyBluey ? .on : .off
+            menu.addItem(hands)
             menu.addItem(submenu("Fireworks Model", fireworksModelMenu()))
             menu.addItem(item("Fireworks Key…", #selector(editFireworksKey)))
         }

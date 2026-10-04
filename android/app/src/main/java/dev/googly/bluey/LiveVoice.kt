@@ -65,6 +65,9 @@ class LiveVoice(context: Context) {
 
     var state by mutableStateOf(State.Asleep)
         private set
+    /** The Mac listens for "Hey Bluey", so you don't have to hold him to ask. */
+    var handsFree by mutableStateOf(false)
+        private set
 
     /**
      * Asks the Mac how to start: its reply carries a short-lived OpenAI key, or says "macBrain" when the Mac
@@ -104,6 +107,8 @@ class LiveVoice(context: Context) {
     @Volatile private var socket: WebSocket? = null
     /** The Mac does the listening and thinking (Fireworks); this phone is the face, the hold button and the chirps. */
     private var macBrain = false
+    /** The Mac is listening for your question without a hold ("Hey Bluey", or a follow-up). */
+    private var macEarsOpen = false
     private val live get() = socket != null || macBrain
     /** True during a session where the Mac is the brain (it ends if the Mac goes away). */
     val usesMac: Boolean get() = macBrain
@@ -158,7 +163,10 @@ class LiveVoice(context: Context) {
                 if (state != State.Waking) return@post
                 val token = reply?.text
                 when {
-                    reply?.command == "macBrain" -> startMacBrain()
+                    reply?.command == "macBrain" -> {
+                        handsFree = reply.text == "handsFree"
+                        startMacBrain()
+                    }
                     token != null -> withMic { granted ->
                         if (state != State.Waking) return@withMic
                         if (granted) {
@@ -187,6 +195,8 @@ class LiveVoice(context: Context) {
 
     fun sleep() {
         main.removeCallbacks(macGaveUp)
+        handsFree = false
+        macEarsOpen = false
         if (live) onSessionEnd?.invoke()
         macBrain = false
         askedItems.clear()
@@ -339,6 +349,24 @@ class LiveVoice(context: Context) {
             "asked" -> {
                 onUserTurn?.invoke(item, true)
                 onUserWords?.invoke(item, text, true)
+                macEarsOpen = false
+                if (!holding && !responseActive) {
+                    // Asked hands-free ("Hey Bluey …"): he's on it.
+                    moveTo(State.Thinking)
+                    responseActive = true
+                    main.removeCallbacks(macGaveUp)
+                    main.postDelayed(macGaveUp, 90_000)
+                }
+            }
+            "earsOpen" -> {
+                // Heard "Hey Bluey" (a little chirp to say so), or he's open to a follow-up.
+                macEarsOpen = true
+                if (state == State.Listening) moveTo(State.Asking)
+                if (text == "wake") chirp(1)
+            }
+            "earsClosed" -> {
+                macEarsOpen = false
+                if (state == State.Asking && !holding) moveTo(State.Listening)
             }
             "replying" -> {
                 moveTo(State.Speaking)
@@ -460,7 +488,7 @@ class LiveVoice(context: Context) {
             sleep()
             return
         }
-        if (state == State.Speaking || state == State.Thinking) moveTo(if (holding) State.Asking else State.Listening)
+        if (state == State.Speaking || state == State.Thinking) moveTo(if (holding || macEarsOpen) State.Asking else State.Listening)
     }
 
     // endregion

@@ -143,7 +143,7 @@ fun GooglyRoot(googly: Googly) {
                 },
             )
 
-            ModeIndicator(live.state)
+            ModeIndicator(live.state, live.handsFree)
 
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout)) {
                 // Bluey's app: sessions, transcripts and settings.
@@ -195,10 +195,11 @@ private class Look(val color: Color, val label: String?, val icon: ImageVector, 
 
 private val listeningBlue = hex(0x4F8BFF)
 
-private fun look(state: LiveVoice.State) = when (state) {
+private fun look(state: LiveVoice.State, handsFree: Boolean) = when (state) {
     LiveVoice.State.Asleep -> Look(Palette.inkSoft, null, Icons.Filled.Visibility, 0f, 0.0)
     LiveVoice.State.Waking -> Look(hex(0xFFD66B), "Waking up", Icons.Filled.WbSunny, 6f, 1.6)
-    LiveVoice.State.Listening -> Look(listeningBlue, "Listening · hold to ask", Icons.Filled.Hearing, 10f, 0.0)
+    LiveVoice.State.Listening ->
+        Look(listeningBlue, if (handsFree) "Listening · say “Hey Bluey”" else "Listening · hold to ask", Icons.Filled.Hearing, 10f, 0.0)
     LiveVoice.State.Asking -> Look(listeningBlue, "I'm all ears", Icons.Filled.Mic, 16f, 1.2)
     LiveVoice.State.Thinking -> Look(hex(0xC79BFF), "Thinking", Icons.Filled.AutoAwesome, 8f, 1.1)
     LiveVoice.State.Speaking -> Look(hex(0xFF9AD0), "Replying", Icons.Filled.ChatBubble, 8f, 0.0)
@@ -216,8 +217,8 @@ private fun screenCornerRadius(view: View): Float? {
  * plus a small label in the corner. Following your mouse is just a little eye icon. No glows.
  */
 @Composable
-fun ModeIndicator(state: LiveVoice.State) {
-    val look = look(state)
+fun ModeIndicator(state: LiveVoice.State, handsFree: Boolean) {
+    val look = look(state, handsFree)
     val color by animateColorAsState(look.color, tween(250), label = "mode color")
     val border by animateFloatAsState(look.border, tween(250), label = "mode border")
     val tick = rememberFrameTick(look.pulse > 0)
