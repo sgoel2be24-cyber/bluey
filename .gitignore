@@ -8,3 +8,10 @@ xcuserdata/
 Secrets.xcconfig
 *.env
 .env*
+# Android
+.gradle/
+.kotlin/
+local.properties
+.idea/
+*.iml
+captures/

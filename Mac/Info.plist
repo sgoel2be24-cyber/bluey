@@ -21,7 +21,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Googly Eyes talks to the character on your iPhone over your local network.</string>
+	<string>Googly Eyes talks to the character on your phone over your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hold ⌥Space and talk to ask Googly a question.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
