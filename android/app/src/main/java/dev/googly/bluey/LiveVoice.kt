@@ -105,6 +105,15 @@ class LiveVoice(context: Context) {
     /** The Mac does the listening and thinking (Fireworks); this phone is the face, the hold button and the chirps. */
     private var macBrain = false
     private val live get() = socket != null || macBrain
+    /** If the Mac never says it's done (it went away, or got stuck), he stops thinking after this long. */
+    private val macGaveUp = Runnable {
+        if (macBrain && responseActive) {
+            Log.w(TAG, "The Mac didn't finish its reply; back to listening")
+            responseActive = false
+            awaitingQuestion = false
+            finishIfQuiet()
+        }
+    }
     private var recorder: AudioRecord? = null
     private var micThread: Thread? = null
     @Volatile private var recording = false
@@ -175,6 +184,7 @@ class LiveVoice(context: Context) {
         ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     fun sleep() {
+        main.removeCallbacks(macGaveUp)
         if (live) onSessionEnd?.invoke()
         macBrain = false
         askedItems.clear()
@@ -243,6 +253,8 @@ class LiveVoice(context: Context) {
         if (macBrain) {
             responseActive = true  // until the Mac says it's done
             tellMac?.invoke(Packet(command = "askEnd"))
+            main.removeCallbacks(macGaveUp)
+            main.postDelayed(macGaveUp, 90_000)
             return
         }
         // Close off what you just said (it may still be mid-sentence) and ask for a reply.
@@ -333,6 +345,7 @@ class LiveVoice(context: Context) {
             "replyDone" -> if (text.isNotBlank()) onReply?.invoke(text)
             "report" -> if (text.isNotBlank()) onReport?.invoke(text)
             "turnDone" -> {
+                main.removeCallbacks(macGaveUp)
                 responseActive = false
                 awaitingQuestion = false
                 finishIfQuiet()

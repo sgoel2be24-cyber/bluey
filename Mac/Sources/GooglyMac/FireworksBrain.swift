@@ -76,7 +76,7 @@ final class FireworksBrain {
     }
 
     func askEnd() {
-        guard active else { return }
+        guard active else { toPhone?(Packet(command: "turnDone")); return }
         ears.askEnd { [weak self] question in self?.answer(question) }
     }
 
@@ -174,10 +174,21 @@ final class FireworksBrain {
         }
     }
 
+    /// Runs one of his tools on the Mac, giving up if it never comes back.
     private func runTool(_ call: ToolCall) async -> (String, String?) {
-        await withCheckedContinuation { continuation in
+        let limit: Double = call.name == "web_research" ? 120 : 45
+        return await withCheckedContinuation { continuation in
+            var finished = false
+            let finish: (String, String?) -> Void = { text, image in
+                guard !finished else { return }
+                finished = true
+                continuation.resume(returning: (text, image))
+            }
             host.handle(Packet(command: "tool", callID: call.id, tool: call.name, text: call.arguments.isEmpty ? "{}" : call.arguments)) { reply in
-                continuation.resume(returning: (reply.text ?? "", reply.image))
+                finish(reply.text ?? "", reply.image)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + limit) {
+                finish("\(call.name) didn't finish in time. Tell the user in a few words.", nil)
             }
         }
     }

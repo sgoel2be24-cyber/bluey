@@ -258,6 +258,12 @@ final class RealtimeHost {
     }
 
     private func look(prefix: String?) async -> (text: String, image: String?) {
+        // Without permission, ScreenCaptureKit waits on the system prompt instead of failing: ask and say so now.
+        guard CGPreflightScreenCaptureAccess() else {
+            CGRequestScreenCaptureAccess()
+            let problem = "I can't see the screen. Screen Recording permission is off for Googly Eyes on the Mac."
+            return (prefix.map { $0 + " " + problem } ?? problem, nil)
+        }
         do {
             let shot = try await ScreenReader.snapshot()
             snapshot = shot
