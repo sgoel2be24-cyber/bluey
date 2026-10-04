@@ -105,7 +105,9 @@ final class MacEars {
     func askStart() {
         guard running else { return }
         asking = true
-        if let turn = current, !Self.words(turn).isEmpty { closeTurn() }
+        // Talk that's still going when you press is the start of the question (people speak as they press);
+        // talk that had already paused was background.
+        if let turn = current, !Self.words(turn).isEmpty, CACurrentMediaTime() - turn.changed > 1.0 { closeTurn() }
     }
 
     /// Let go: hands back the question once the recognizer has caught up.
