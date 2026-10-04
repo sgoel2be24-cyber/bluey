@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Fonts.registerBundled()
+        addEditMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = MenuIcon.make()
         statusItem.button?.toolTip = "Googly Eyes"
@@ -48,6 +49,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HotKeys.shared.register(keyCode: kVK_ANSI_S) { [weak self] in self?.stopActions() }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.askForKeyIfNeeded() }
+    }
+
+    /// A menu bar app has no menus of its own, so ⌘V, ⌘C and ⌘A wouldn't work in the key boxes without this
+    /// (never shown, it just carries the shortcuts).
+    private func addEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let main = NSMenu()
+        let item = NSMenuItem()
+        item.submenu = edit
+        main.addItem(item)
+        NSApp.mainMenu = main
     }
 
     /// First run: pick a brain and add its key.
