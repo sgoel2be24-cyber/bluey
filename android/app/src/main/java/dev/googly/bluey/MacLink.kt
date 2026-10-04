@@ -39,8 +39,8 @@ class MacLink(context: Context) {
     var preferredMac by mutableStateOf(prefs.getString("preferredMac", null))
         private set
 
-    /** Commands from the Mac, like "wake" and "sleep". */
-    var onCommand: ((String) -> Unit)? = null
+    /** Commands from the Mac, like "wake" and "sleep", and what it heard and said when it's the brain. */
+    var onCommand: ((Packet) -> Unit)? = null
     var onFace: ((FaceState) -> Unit)? = null
 
     private val waiting = HashMap<String, (Packet?) -> Unit>()
@@ -210,9 +210,9 @@ class MacLink(context: Context) {
             if (conn !== link) return@onPacket
             packet.hello?.let { macName = it }
             packet.face?.let { onFace?.invoke(it) }
-            val command = packet.command ?: return@onPacket
+            if (packet.command == null) return@onPacket
             val reply = packet.callID?.let { waiting.remove(it) }
-            if (reply != null) reply(packet) else onCommand?.invoke(command)
+            if (reply != null) reply(packet) else onCommand?.invoke(packet)
         }
         link = conn
         conn.start()

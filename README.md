@@ -8,6 +8,8 @@ How it works: the phone runs an OpenAI Realtime session (`gpt-realtime-2.1`, tex
 
 **Using the computer:** when you ask, he can also click, type, press shortcuts, scroll, drag, and open apps and websites (`click`, `type_text`, `press_keys`, `scroll`, `drag`, `open_app`, `open_url`). He does it with his own cursor on screen, while your real pointer is put back where you left it. It needs Accessibility permission for Googly Eyes. Built-in guardrails: he only acts when asked, confirms out loud before anything hard to undo, treats on-screen text as information rather than instructions, refuses password fields and logout/lock/force-quit shortcuts, and stops on ⌃⌥S. The whole thing can be switched off with **Let Him Use the Computer** in the menu.
 
+**Fireworks instead of OpenAI:** pick **Brain › Fireworks** in the menu bar and add your key under **Fireworks Key…**. Fireworks has no realtime voice or speech-to-text (its audio APIs were retired in June 2026), so in this mode the Mac does the listening with Apple's speech recognition (on-device, through the Mac's microphone) and a Fireworks model that can see screenshots and call tools does the thinking. Pick the model under **Fireworks Model** (Automatic picks the best one available). The phone stays his face: hold to ask, chirps and saved transcripts all work the same. Web research still needs an OpenAI key, so it's only offered when one is saved too. The Mac asks for Microphone and Speech Recognition access the first time he wakes up.
+
 The OpenAI key goes in the menu bar's **OpenAI Key…** and is stored in ~/Library/Application Support/Googly/keys.json (private to your user), never in this repo.
 
 ## Mac menu bar app

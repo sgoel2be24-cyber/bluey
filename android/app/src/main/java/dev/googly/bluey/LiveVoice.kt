@@ -66,8 +66,13 @@ class LiveVoice(context: Context) {
     var state by mutableStateOf(State.Asleep)
         private set
 
-    /** Asks the Mac for a short-lived key. Calls back with null on failure. */
-    var requestToken: ((done: (String?) -> Unit) -> Unit)? = null
+    /**
+     * Asks the Mac how to start: its reply carries a short-lived OpenAI key, or says "macBrain" when the Mac
+     * listens and thinks itself (Fireworks). Calls back with null if the Mac couldn't start a session.
+     */
+    var requestSession: ((done: (Packet?) -> Unit) -> Unit)? = null
+    /** Sends an event to the Mac (hold and let go, when the Mac is the brain). */
+    var tellMac: ((Packet) -> Unit)? = null
     /** Runs a tool on the Mac: (name, JSON arguments) → (output text, optional JPEG base64). */
     var runTool: ((name: String, arguments: String, done: (String, String?) -> Unit) -> Unit)? = null
     /** What he's saying, as it streams in. The flag is true when the reply finished. */
@@ -97,6 +102,9 @@ class LiveVoice(context: Context) {
         }
 
     @Volatile private var socket: WebSocket? = null
+    /** The Mac does the listening and thinking (Fireworks); this phone is the face, the hold button and the chirps. */
+    private var macBrain = false
+    private val live get() = socket != null || macBrain
     private var recorder: AudioRecord? = null
     private var micThread: Thread? = null
     @Volatile private var recording = false
@@ -133,24 +141,33 @@ class LiveVoice(context: Context) {
     fun wake() {
         if (state != State.Asleep) return
         moveTo(State.Waking)
-        val proceed: (Boolean) -> Unit = proceed@{ granted ->
-            if (!granted) {
-                onCaption?.invoke("I need the microphone. Turn it on for Googly Eyes in your phone's Settings.", true)
-                moveTo(State.Asleep)
-                return@proceed
-            }
-            val requestToken = requestToken ?: run { moveTo(State.Asleep); return@proceed }
-            requestToken { token ->
-                main.post {
-                    if (state != State.Waking) return@post
-                    if (token == null) moveTo(State.Asleep) else connect(token)
+        val requestSession = requestSession ?: run { moveTo(State.Asleep); return }
+        requestSession { reply ->
+            main.post {
+                if (state != State.Waking) return@post
+                val token = reply?.text
+                when {
+                    reply?.command == "macBrain" -> startMacBrain()
+                    token != null -> withMic { granted ->
+                        if (state != State.Waking) return@withMic
+                        if (granted) {
+                            connect(token)
+                        } else {
+                            onCaption?.invoke("I need the microphone. Turn it on for Googly Eyes in your phone's Settings.", true)
+                            moveTo(State.Asleep)
+                        }
+                    }
+                    else -> moveTo(State.Asleep)
                 }
             }
         }
+    }
+
+    private fun withMic(then: (Boolean) -> Unit) {
         when {
-            hasMic() -> proceed(true)
-            askMicPermission != null -> askMicPermission?.invoke { granted -> main.post { proceed(granted) } }
-            else -> proceed(false)
+            hasMic() -> then(true)
+            askMicPermission != null -> askMicPermission?.invoke { granted -> main.post { then(granted) } }
+            else -> then(false)
         }
     }
 
@@ -158,7 +175,8 @@ class LiveVoice(context: Context) {
         ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     fun sleep() {
-        if (socket != null) onSessionEnd?.invoke()
+        if (live) onSessionEnd?.invoke()
+        macBrain = false
         askedItems.clear()
         awaitingQuestion = false
         val old = socket
@@ -178,8 +196,12 @@ class LiveVoice(context: Context) {
 
     /** Says a quick hi (for checking the chirp volume). */
     fun sayHi() {
-        if (socket == null) {
+        if (!live) {
             wake()
+            return
+        }
+        if (macBrain) {
+            tellMac?.invoke(Packet(command = "sayHi"))
             return
         }
         send(JSONObject().put("type", "response.create")
@@ -198,15 +220,16 @@ class LiveVoice(context: Context) {
             wake()
             return
         }
-        if (socket == null) return
+        if (!live) return
         if (state == State.Listening || state == State.Speaking) moveTo(State.Asking)
+        if (macBrain) tellMac?.invoke(Packet(command = "askStart"))
     }
 
     /** You let go: he answers (or does the thing) using everything he's heard as context. */
     fun endAsk() {
         if (!holding) return
         holding = false
-        if (socket == null || state == State.Waking) {
+        if (!live || state == State.Waking) {
             askWhenReady = true
             return
         }
@@ -217,6 +240,11 @@ class LiveVoice(context: Context) {
         askWhenReady = false
         moveTo(State.Thinking)
         awaitingQuestion = true
+        if (macBrain) {
+            responseActive = true  // until the Mac says it's done
+            tellMac?.invoke(Packet(command = "askEnd"))
+            return
+        }
         // Close off what you just said (it may still be mid-sentence) and ask for a reply.
         send(JSONObject().put("type", "input_audio_buffer.commit"))
         send(JSONObject().put("type", "response.create"))
@@ -250,7 +278,8 @@ class LiveVoice(context: Context) {
         })
         socket = ws
         try {
-            startAudio()
+            startSpeaker()
+            startMic()
         } catch (e: Exception) {
             onCaption?.invoke("I couldn't start the microphone: ${e.message}", true)
             sleep()
@@ -263,6 +292,52 @@ class LiveVoice(context: Context) {
 
     private fun send(event: JSONObject) {
         socket?.send(event.toString())
+    }
+
+    /** The Mac is the brain: no OpenAI session or mic here, just the speaker for his chirps. */
+    private fun startMacBrain() {
+        macBrain = true
+        try {
+            startSpeaker()
+        } catch (e: Exception) {
+            Log.w(TAG, "No speaker for chirps: $e")
+        }
+        onSessionStart?.invoke()
+        chirp(2)
+        if (askWhenReady) {
+            ask()
+        } else {
+            moveTo(if (holding) State.Asking else State.Listening)
+            if (holding) tellMac?.invoke(Packet(command = "askStart"))
+        }
+    }
+
+    /** What the Mac heard and said, when it's the brain. */
+    fun fromMac(packet: Packet) {
+        if (!macBrain) return
+        val text = packet.text.orEmpty()
+        val item = "mac-${packet.speech ?: 0}"
+        when (packet.command) {
+            "heard" -> {
+                onUserTurn?.invoke(item, false)
+                onUserWords?.invoke(item, text, false)
+            }
+            "asked" -> {
+                onUserTurn?.invoke(item, true)
+                onUserWords?.invoke(item, text, true)
+            }
+            "replying" -> {
+                moveTo(State.Speaking)
+                chirp(text.trim().split(Regex("\\s+")).size.coerceIn(3, 5))
+            }
+            "replyDone" -> if (text.isNotBlank()) onReply?.invoke(text)
+            "report" -> if (text.isNotBlank()) onReport?.invoke(text)
+            "turnDone" -> {
+                responseActive = false
+                awaitingQuestion = false
+                finishIfQuiet()
+            }
+        }
     }
 
     // endregion
@@ -377,18 +452,7 @@ class LiveVoice(context: Context) {
 
     // region Audio
 
-    @SuppressLint("MissingPermission")
-    private fun startAudio() {
-        val (rec, rate) = openRecorder() ?: throw IllegalStateException("no microphone is available")
-        recorder = rec
-        // Echo cancellation, so he doesn't hear his own chirps.
-        if (AcousticEchoCanceler.isAvailable()) {
-            AcousticEchoCanceler.create(rec.audioSessionId)?.let { it.enabled = true; effects += it }
-        }
-        if (NoiseSuppressor.isAvailable()) {
-            NoiseSuppressor.create(rec.audioSessionId)?.let { it.enabled = true; effects += it }
-        }
-
+    private fun startSpeaker() {
         val minOut = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val out = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
@@ -407,6 +471,19 @@ class LiveVoice(context: Context) {
         out.play()
         track = out
         audioReady = true
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startMic() {
+        val (rec, rate) = openRecorder() ?: throw IllegalStateException("no microphone is available")
+        recorder = rec
+        // Echo cancellation, so he doesn't hear his own chirps.
+        if (AcousticEchoCanceler.isAvailable()) {
+            AcousticEchoCanceler.create(rec.audioSessionId)?.let { it.enabled = true; effects += it }
+        }
+        if (NoiseSuppressor.isAvailable()) {
+            NoiseSuppressor.create(rec.audioSessionId)?.let { it.enabled = true; effects += it }
+        }
 
         rec.startRecording()
         recording = true

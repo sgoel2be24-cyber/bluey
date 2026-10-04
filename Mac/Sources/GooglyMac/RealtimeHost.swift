@@ -27,9 +27,28 @@ final class RealtimeHost {
 
     private var engine: CursorEngine { overlay.view.engine }
 
+    /// His brain when Fireworks is picked instead of OpenAI (the Mac listens and thinks; the phone is the face).
+    private(set) lazy var brain = FireworksBrain(host: self)
+
     /// Handles a request from the phone. `reply` sends a packet back to that phone.
     func handle(_ packet: Packet, reply: @escaping (Packet) -> Void) {
         switch packet.command {
+        case "realtimeToken" where Settings.shared.brain == .fireworks:
+            // No realtime session on the phone: tell it the Mac is doing the listening and thinking.
+            brain.begin { [weak self] problem in
+                if let problem {
+                    reply(Packet(command: "realtimeToken", callID: packet.callID))
+                    self?.showCaption(problem, for: 8)
+                } else {
+                    reply(Packet(command: "macBrain", callID: packet.callID))
+                }
+            }
+        case "askStart":
+            brain.askStart()
+        case "askEnd":
+            brain.askEnd()
+        case "sayHi":
+            brain.sayHi()
         case "realtimeToken":
             Task { @MainActor in
                 do {
@@ -104,6 +123,7 @@ final class RealtimeHost {
         engine.brainMood = nil
         engine.gazeOverride = nil  // his eyes follow your mouse while he listens
         if !on {
+            brain.end()
             queue = []
             stopChoreography()
             overlay.goHome()

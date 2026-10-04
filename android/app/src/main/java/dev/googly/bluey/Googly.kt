@@ -13,9 +13,10 @@ class Googly(context: Context) {
         link.onFace = { animator.receive(it) }
         animator.localTalk = { live.level }
 
-        live.requestToken = { done ->
-            link.request(Packet(command = "realtimeToken")) { reply -> done(reply?.text) }
+        live.requestSession = { done ->
+            link.request(Packet(command = "realtimeToken")) { reply -> done(reply) }
         }
+        live.tellMac = { link.send(it) }
         live.runTool = { name, arguments, done ->
             link.request(Packet(command = "tool", tool = name, text = arguments)) { reply ->
                 done(reply?.text ?: "The Mac didn't answer.", reply?.image)
@@ -55,10 +56,11 @@ class Googly(context: Context) {
                 LiveVoice.State.Speaking -> animator.localMood = Mood.talking
             }
         }
-        link.onCommand = { command ->
-            when (command) {
+        link.onCommand = { packet ->
+            when (packet.command) {
                 "wake" -> live.wake()
                 "sleep" -> live.sleep()
+                else -> live.fromMac(packet)
             }
         }
     }
