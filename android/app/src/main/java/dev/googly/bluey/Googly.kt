@@ -56,6 +56,8 @@ class Googly(context: Context) {
                 LiveVoice.State.Speaking -> animator.localMood = Mood.talking
             }
         }
+        // When the Mac is the brain, its session is gone with the link: nap, so a double tap starts a fresh one.
+        link.onDisconnected = { if (live.usesMac) live.sleep() }
         link.onCommand = { packet ->
             when (packet.command) {
                 "wake" -> live.wake()

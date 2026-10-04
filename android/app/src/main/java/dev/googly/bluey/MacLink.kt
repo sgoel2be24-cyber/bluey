@@ -42,6 +42,8 @@ class MacLink(context: Context) {
     /** Commands from the Mac, like "wake" and "sleep", and what it heard and said when it's the brain. */
     var onCommand: ((Packet) -> Unit)? = null
     var onFace: ((FaceState) -> Unit)? = null
+    /** The link to the Mac dropped (it quit, restarted, or left the Wi-Fi). */
+    var onDisconnected: (() -> Unit)? = null
 
     private val waiting = HashMap<String, (Packet?) -> Unit>()
     private val found = LinkedHashMap<String, NsdServiceInfo>()
@@ -204,6 +206,7 @@ class MacLink(context: Context) {
                 macName = null
                 link = null
                 scheduleRetry()
+                onDisconnected?.invoke()
             }
         }
         conn.onPacket = onPacket@{ packet ->

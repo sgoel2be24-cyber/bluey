@@ -105,6 +105,8 @@ class LiveVoice(context: Context) {
     /** The Mac does the listening and thinking (Fireworks); this phone is the face, the hold button and the chirps. */
     private var macBrain = false
     private val live get() = socket != null || macBrain
+    /** True during a session where the Mac is the brain (it ends if the Mac goes away). */
+    val usesMac: Boolean get() = macBrain
     /** If the Mac never says it's done (it went away, or got stuck), he stops thinking after this long. */
     private val macGaveUp = Runnable {
         if (macBrain && responseActive) {
