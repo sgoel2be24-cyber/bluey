@@ -257,6 +257,11 @@ final class RealtimeHost {
         }
     }
 
+    /// A look at the screen outside his tool calls: the Fireworks brain takes one while you're asking.
+    func lookNow() async -> (text: String, image: String?) {
+        await look(prefix: nil)
+    }
+
     private func look(prefix: String?) async -> (text: String, image: String?) {
         // Without permission, ScreenCaptureKit waits on the system prompt instead of failing: ask and say so now.
         guard CGPreflightScreenCaptureAccess() else {

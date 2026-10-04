@@ -18,6 +18,8 @@ final class FireworksBrain {
     private var overheard: [String] = []
     private var turn = 0
     private var thinking: Task<Void, Never>?
+    /// A look at the screen taken as you start asking, so his answer can point straight away.
+    private var screen: Task<(text: String, image: String?), Never>?
     private var sleepAfterReply = false
     private(set) var active = false
 
@@ -66,6 +68,7 @@ final class FireworksBrain {
         ears.stop()
         thinking?.cancel()
         thinking = nil
+        screen = nil
         messages = []
         overheard = []
     }
@@ -73,17 +76,20 @@ final class FireworksBrain {
     func askStart() {
         guard active else { return }
         ears.askStart()
+        // Look while you're still talking, so the screen is ready the moment you let go.
+        screen = Task { [host] in await host.lookNow() }
     }
 
     func askEnd() {
         guard active else { toPhone?(Packet(command: "turnDone")); return }
+        if screen == nil { screen = Task { [host] in await host.lookNow() } }
         ears.askEnd { [weak self] question in self?.answer(question) }
     }
 
     func sayHi() {
         guard active, thinking == nil else { return }
         messages.append(["role": "user", "content": "(The user tapped a test button.) Reply with a quick, cheerful hi in under eight words."])
-        think()
+        think { await $0.run() }
     }
 
     private func heard(_ text: String) {
@@ -94,7 +100,9 @@ final class FireworksBrain {
     }
 
     private func answer(_ question: String) {
-        guard active else { return }
+        guard active else { toPhone?(Packet(command: "turnDone")); return }
+        let screen = self.screen ?? Task { [host] in await host.lookNow() }
+        self.screen = nil
         var content = ""
         if !overheard.isEmpty {
             content += "Overheard since your last reply:\n" + overheard.map { "- " + $0 }.joined(separator: "\n") + "\n\n"
@@ -108,17 +116,30 @@ final class FireworksBrain {
             toPhone?(Packet(command: "asked", speech: turn, text: question))
             content += "Question: " + question
         }
-        messages.append(["role": "user", "content": content])
-        think()
+        think { brain in
+            // The question goes in with the screen as it was when they asked: its text with ids, and a picture.
+            let look = await screen.value
+            var parts: [[String: Any]] = [["type": "text", "text": content + Self.screenMarker + look.text]]
+            if let image = look.image {
+                parts.append(["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(image)"]])
+            }
+            brain.messages.append(["role": "user", "content": parts])
+            await brain.run()
+        }
     }
 
     // MARK: Thinking
 
-    private func think() {
+    private static let screenMarker = "\n\nThe screen when they asked:\n"
+    /// Tools that only point (or say goodbye): once he's said his line with them, there's nothing to go back for.
+    private static let quickTools: Set<String> = ["point_at", "point_at_spot", "stop_pointing", "go_to_sleep"]
+
+    private func think(_ work: @escaping (FireworksBrain) async -> Void) {
         thinking?.cancel()
         thinking = Task { [weak self] in
-            await self?.run()
-            self?.thinking = nil
+            guard let self else { return }
+            await work(self)
+            self.thinking = nil
         }
     }
 
@@ -150,8 +171,10 @@ final class FireworksBrain {
             if reply.calls.isEmpty { break }
 
             var images: [String] = []
+            var lines: [String] = []
             for call in reply.calls {
                 if call.name == "go_to_sleep" { sleepAfterReply = true }
+                if let line = Self.say(in: call.arguments) { lines.append(line) }
                 let (output, image) = await runTool(call)
                 guard active else { return }
                 if call.name == "web_research", let range = output.range(of: RealtimeHost.reportMarker) {
@@ -166,6 +189,15 @@ final class FireworksBrain {
                     ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\($0)"]] as [String: Any]
                 }])
             }
+            // His line came inside the pointing call: show it by the cursor.
+            if !lines.isEmpty {
+                let line = lines.joined(separator: " ")
+                if reply.text.isEmpty { toPhone?(Packet(command: "replying", text: line)) }
+                host.handle(Packet(command: "captionDone", text: reply.text.isEmpty ? line : reply.text + " " + line)) { _ in }
+                toPhone?(Packet(command: "replyDone", text: line))
+            }
+            // Pointed and said his piece: no need for another trip to the model.
+            if reply.calls.allSatisfy({ Self.quickTools.contains($0.name) }), !lines.isEmpty || !reply.text.isEmpty { break }
         }
         toPhone?(Packet(command: "turnDone"))
         if sleepAfterReply {
@@ -225,7 +257,7 @@ final class FireworksBrain {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         var body: [String: Any] = [
             "model": model,
-            "messages": Self.withLatestScreenshotOnly(messages),
+            "messages": Self.withLatestScreenOnly(messages),
             "tools": Self.tools,
             "tool_choice": "auto",
             "stream": true,
@@ -306,6 +338,13 @@ final class FireworksBrain {
         return body
     }
 
+    /// The line he wants to say, from a pointing call's "say" argument.
+    private static func say(in arguments: String) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String: Any],
+              let line = (json["say"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty else { return nil }
+        return line
+    }
+
     /// Some models think out loud in <think> tags first; only the answer goes in the bubble.
     private static func withoutThinking(_ text: String) -> String {
         var text = text.replacingOccurrences(of: #"(?s)<think>.*?</think>"#, with: "", options: .regularExpression)
@@ -313,17 +352,34 @@ final class FireworksBrain {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Old screenshots are swapped for a note, so each request carries only the latest picture.
-    private static func withLatestScreenshotOnly(_ messages: [[String: Any]]) -> [[String: Any]] {
-        let last = messages.lastIndex { ($0["content"] as? [[String: Any]])?.contains { $0["type"] as? String == "image_url" } == true }
+    /// Every look at the screen is big (a picture plus every word on it), so only the latest one is sent;
+    /// earlier ones are swapped for a short note.
+    private static func withLatestScreenOnly(_ messages: [[String: Any]]) -> [[String: Any]] {
+        func hasScreen(_ message: [String: Any]) -> Bool {
+            if let text = message["content"] as? String { return text.contains(screenListMarker) }
+            let parts = message["content"] as? [[String: Any]] ?? []
+            return parts.contains { $0["type"] as? String == "image_url" || ($0["text"] as? String)?.contains(screenMarker) == true }
+        }
+        guard let latest = messages.lastIndex(where: hasScreen) else { return messages }
         return messages.enumerated().map { index, message in
-            guard index != last, let parts = message["content"] as? [[String: Any]],
-                  parts.contains(where: { $0["type"] as? String == "image_url" }) else { return message }
+            guard index < latest, hasScreen(message) else { return message }
             var message = message
-            message["content"] = "(An earlier screenshot, no longer shown.)"
+            if let text = message["content"] as? String {
+                // A tool's look at the screen: keep what it did, drop the screen.
+                let head = text.components(separatedBy: "\n").first ?? ""
+                message["content"] = String(head.prefix(200)) + " (Earlier screen, no longer shown.)"
+            } else {
+                let parts = message["content"] as? [[String: Any]] ?? []
+                let texts = parts.compactMap { $0["text"] as? String }.map { $0.components(separatedBy: screenMarker).first ?? $0 }
+                let kept = texts.filter { $0 != "The screen right now:" }.joined(separator: "\n")
+                message["content"] = kept.isEmpty ? "(An earlier screenshot, no longer shown.)" : kept + "\n\n(Their screen then: no longer shown.)"
+            }
             return message
         }
     }
+
+    /// How a look at the screen starts its list of text (see ScreenSnapshot.targetList).
+    private static let screenListMarker = "Text on screen (L = line"
 
     // MARK: Instructions and tools
 
@@ -332,11 +388,24 @@ final class FireworksBrain {
         RealtimeHost.tools.compactMap { tool in
             guard let name = tool["name"] as? String else { return nil }
             if name == "web_research", Keychain.get(.openai) == nil { return nil }
-            return ["type": "function", "function": [
-                "name": name,
-                "description": tool["description"] ?? "",
-                "parameters": tool["parameters"] ?? ["type": "object", "properties": [String: Any]()],
-            ] as [String: Any]]
+            var description = tool["description"] as? String ?? ""
+            var parameters = tool["parameters"] as? [String: Any] ?? ["type": "object", "properties": [String: Any]()]
+            switch name {
+            case "look_at_screen":
+                description = "Take a fresh look at the user's screen. Their question already comes with the screen as it was "
+                    + "when they asked, so only call this if it may have changed since (for example after you've clicked or typed)."
+            case "point_at", "point_at_spot":
+                // His answer rides along with the point, so one call does both.
+                var properties = parameters["properties"] as? [String: Any] ?? [:]
+                properties["say"] = ["type": "string",
+                                     "description": "Your one-line answer about the thing, shown in your speech bubble as you point."]
+                parameters["properties"] = properties
+                parameters["required"] = (parameters["required"] as? [String] ?? []) + ["say"]
+                description += " Put your one-line answer in say."
+            default:
+                break
+            }
+            return ["type": "function", "function": ["name": name, "description": description, "parameters": parameters] as [String: Any]]
         }
     }
 
@@ -345,19 +414,21 @@ final class FireworksBrain {
         How the conversation works: you can hear the user the whole time. What they say reaches you as text. \
         Lines under "Overheard" are background context: never reply to them on their own. You only reply when \
         the user holds the phone screen to ask you something, marked "Question:". Answer that, using the earlier \
-        talk as context.
+        talk as context. Each question comes with the screen as it was when they asked: the frontmost app, its \
+        controls (C ids), its text (lines L#, words W#) with positions on a 0-1000 grid, where their mouse is, and \
+        a screenshot.
 
-        Most important rule: when a request needs a tool, call the tool FIRST with no words before it. Never \
-        write things like "one moment", "sure", "okay" or "let me". Reply only after, in one short line of plain \
-        text. No lists, no markdown, no emoji, no quotation marks around your reply, never mention ids or coordinates.
+        Your replies are one short line of plain text. No lists, no markdown, no emoji, no quotation marks around \
+        your reply, never mention ids or coordinates. Never write things like "one moment", "sure", "okay" or \
+        "let me", and never say you're going to look or point: just do it.
 
         Point whenever you can. If the question is about anything on the screen ("what's this?", "what does this \
-        mean?"), call look_at_screen, then point_at (or point_at_spot) the thing you're talking about, then give \
-        your one-line answer; your bubble appears right by your cursor. "This", "that" and "here" mean what's at \
-        the user's mouse pointer, which look_at_screen tells you. Point at the most specific thing (a word or \
-        number rather than a whole line). For shapes, arrows or charts with no text, use point_at_spot. If the \
-        screen may have changed, look again. When the user says goodbye or asks you to sleep, reply with a very \
-        short goodbye and call go_to_sleep.
+        mean?"), answer by calling point_at on the thing, with your one-line answer in say: that one call is your \
+        whole reply, and your bubble appears right by your cursor. "This", "that" and "here" mean what's at the \
+        user's mouse pointer. Point at the most specific thing (a word or number rather than a whole line). For \
+        shapes, arrows or charts with no text, use point_at_spot. Only call look_at_screen if the screen may have \
+        changed since they asked. If the question isn't about the screen, just reply with your line. When the user \
+        says goodbye or asks you to sleep, reply with a very short goodbye and call go_to_sleep.
         """
         if Keychain.get(.openai) != nil {
             guide += """
@@ -380,21 +451,23 @@ final class FireworksBrain {
     @discardableResult
     func ensureModel() async -> String {
         if let picked = Settings.shared.fireworksModel { return picked }
+        if let automatic { return automatic }
         await loadModels()
-        if let best = Self.preferred(models) {
-            Settings.shared.fireworksModel = best
-            return best
-        }
-        return Self.fallbackModel
+        let best = Self.preferred(models) ?? Self.fallbackModel
+        automatic = best  // remembered for this run only, so Automatic keeps following the best available
+        return best
     }
 
+    private var automatic: String?
+
     /// A safe default if the model list can't be read: a serverless model that takes images.
-    static let fallbackModel = "accounts/fireworks/models/qwen3p8-max"
+    static let fallbackModel = "accounts/fireworks/models/ember-1"
 
     /// Strong, fast, multimodal tool-callers first.
     private static func preferred(_ models: [(id: String, name: String)]) -> String? {
-        // From a side-by-side run (October 2026): all call tools well; these answer fastest with thinking off.
-        let order = ["qwen3p8-max", "deepseek-v4p1-flash", "kimi-k3", "ember-1", "qwen3", "kimi", "deepseek", "glm", "gemma", "llama"]
+        // From side-by-side runs (October 2026) with real screens: all call tools well; these answer fastest with thinking off.
+        // Ember-1 also answered inside its pointing calls most reliably, in a single round.
+        let order = ["ember-1", "deepseek-v4p1-flash", "qwen3p8-max", "kimi-k3", "qwen3", "kimi", "deepseek", "glm", "gemma", "llama"]
         for hint in order {
             if let match = models.first(where: { $0.id.contains(hint) && !$0.id.contains("thinking") && !$0.id.contains("code") }) {
                 return match.id
@@ -439,5 +512,6 @@ final class FireworksBrain {
     /// Forgets the model list (after a new key), so it's read again.
     func resetModels() {
         models = []
+        automatic = nil
     }
 }

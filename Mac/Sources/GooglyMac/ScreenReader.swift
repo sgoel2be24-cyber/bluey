@@ -75,6 +75,22 @@ enum ScreenReaderError: LocalizedError {
 
 /// Captures the main display (without Googly's own cursor and captions) and reads every word with its exact box.
 enum ScreenReader {
+    /// The text recognizer takes many seconds to load the first time an app uses it, so do that at launch
+    /// instead of during his first look at the screen.
+    static func warmUp() {
+        Task.detached(priority: .utility) {
+            guard let context = CGContext(data: nil, width: 96, height: 32, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0) else { return }
+            context.setFillColor(gray: 1, alpha: 1)
+            context.fill(CGRect(x: 0, y: 0, width: 96, height: 32))
+            guard let image = context.makeImage() else { return }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            try? VNImageRequestHandler(cgImage: image).perform([request])
+        }
+    }
+
     static func snapshot() async throws -> ScreenSnapshot {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else {
