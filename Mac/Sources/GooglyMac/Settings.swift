@@ -53,6 +53,20 @@ final class Settings {
         set { defaults.set(newValue.rawValue, forKey: "trail"); onChange?() }
     }
 
+    /// Which AI is his brain: OpenAI's realtime voice (the phone listens), or Fireworks (the Mac listens).
+    enum Brain: String { case openai, fireworks }
+
+    var brain: Brain {
+        get { Brain(rawValue: defaults.string(forKey: "brain") ?? "") ?? .openai }
+        set { defaults.set(newValue.rawValue, forKey: "brain"); onChange?() }
+    }
+
+    /// The Fireworks model picked in the menu (nil: pick the best one that can see and use tools).
+    var fireworksModel: String? {
+        get { defaults.string(forKey: "fireworksModel").flatMap { $0.isEmpty ? nil : $0 } }
+        set { defaults.set(newValue, forKey: "fireworksModel"); onChange?() }
+    }
+
     /// The mood picked by hand in the menu.
     var mood: Mood {
         get { Mood(rawValue: defaults.string(forKey: "mood") ?? "") ?? .listening }

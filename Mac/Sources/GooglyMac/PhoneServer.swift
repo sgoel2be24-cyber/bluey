@@ -17,7 +17,7 @@ final class PhoneServer {
     /// Called when a phone asks for something. The second argument replies to that phone.
     var onRequest: ((Packet, @escaping (Packet) -> Void) -> Void)?
 
-    var phoneNames: [String] { phones.values.map { $0.name ?? "iPhone" } }
+    var phoneNames: [String] { phones.values.map { $0.name ?? "Phone" } }
 
     func start() {
         do {

@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Fonts.registerBundled()
+        addEditMenu()
+        ScreenReader.warmUp()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = MenuIcon.make()
         statusItem.button?.toolTip = "Googly Eyes"
@@ -32,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if names.isEmpty, self?.host.awake == true { self?.host.setAwake(false) }
         }
         server.onRequest = { [weak self] packet, reply in self?.host.handle(packet, reply: reply) }
+        host.brain.toPhone = { [weak self] packet in self?.server.broadcast(packet) }
         server.start()
         host.onChange = { [weak self] in self?.refreshIcon() }
 
@@ -46,8 +49,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // ⌃⌥S stops him using the computer right away.
         HotKeys.shared.register(keyCode: kVK_ANSI_S) { [weak self] in self?.stopActions() }
 
-        if Keychain.get(.openai) == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.editKeys() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.askForKeyIfNeeded() }
+    }
+
+    /// A menu bar app has no menus of its own, so ⌘V, ⌘C and ⌘A wouldn't work in the key boxes without this
+    /// (never shown, it just carries the shortcuts).
+    private func addEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let main = NSMenu()
+        let item = NSMenuItem()
+        item.submenu = edit
+        main.addItem(item)
+        NSApp.mainMenu = main
+    }
+
+    /// First run: pick a brain and add its key.
+    private func askForKeyIfNeeded() {
+        switch settings.brain {
+        case .fireworks where Keychain.get(.fireworks) == nil:
+            editFireworksKey()
+        case .openai where Keychain.get(.openai) == nil:
+            if Keychain.get(.fireworks) != nil { settings.brain = .fireworks; return }
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Which AI should be his brain?"
+            alert.informativeText = """
+            OpenAI: realtime voice on the phone, plus web research.
+            Fireworks: the Mac listens with Apple's speech recognition and a Fireworks model thinks. No web research.
+            You can change this any time under Brain in the menu bar.
+            """
+            alert.addButton(withTitle: "Fireworks")
+            alert.addButton(withTitle: "OpenAI")
+            if alert.runModal() == .alertFirstButtonReturn {
+                settings.brain = .fireworks
+                editFireworksKey()
+            } else {
+                editKeys()
+            }
+        default:
+            break
         }
     }
 
@@ -200,6 +245,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !key.isEmpty { Keychain.set(.openai, key) }
     }
 
+    @objc private func editFireworksKey() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Fireworks API Key"
+        alert.informativeText = "Saved privately on this Mac (not in the project files). It never leaves the Mac: with Fireworks, the Mac does the listening and thinking."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        field.placeholderString = Keychain.get(.fireworks) == nil ? "fw_…" : "Key saved. Paste a new one to replace it."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        Keychain.set(.fireworks, key)
+        host.brain.resetModels()
+        Task { await host.brain.loadModels() }
+    }
+
+    @objc private func setBrain(_ item: NSMenuItem) {
+        guard let raw = item.representedObject as? String, let brain = Settings.Brain(rawValue: raw), brain != settings.brain else { return }
+        settings.brain = brain
+        if brain == .fireworks, Keychain.get(.fireworks) == nil { editFireworksKey() }
+        if brain == .openai, Keychain.get(.openai) == nil { editKeys() }
+        restartIfAwake()
+    }
+
+    @objc private func setFireworksModel(_ item: NSMenuItem) {
+        settings.fireworksModel = item.representedObject as? String
+        restartIfAwake()
+    }
+
     @objc private func setMood(_ item: NSMenuItem) {
         if let mood = item.representedObject as? String, let m = Mood(rawValue: mood) { settings.mood = m }
     }
@@ -268,6 +345,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(submenu("Phone Sits Under", phoneMenu))
 
         menu.addItem(item("Personality…", #selector(editPersonality)))
+
+        let brainMenu = NSMenu()
+        for (title, brain) in [("OpenAI (Realtime Voice)", Settings.Brain.openai), ("Fireworks", .fireworks)] {
+            let b = item(title, #selector(setBrain(_:)))
+            b.representedObject = brain.rawValue
+            b.state = settings.brain == brain ? .on : .off
+            brainMenu.addItem(b)
+        }
+        menu.addItem(submenu("Brain: \(settings.brain == .fireworks ? "Fireworks" : "OpenAI")", brainMenu))
+        if settings.brain == .fireworks {
+            menu.addItem(submenu("Fireworks Model", fireworksModelMenu()))
+            menu.addItem(item("Fireworks Key…", #selector(editFireworksKey)))
+        }
         menu.addItem(item("OpenAI Key…", #selector(editKeys)))
         menu.addItem(.separator())
 
@@ -289,6 +379,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Googly Eyes", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    /// Serverless Fireworks models that can see screenshots and call tools.
+    private func fireworksModelMenu() -> NSMenu {
+        let menu = NSMenu()
+        let picked = settings.fireworksModel
+        let auto = item("Automatic (Best Available)", #selector(setFireworksModel(_:)))
+        auto.state = picked == nil ? .on : .off
+        menu.addItem(auto)
+        menu.addItem(.separator())
+        let models = host.brain.models
+        if models.isEmpty {
+            let note = NSMenuItem(title: Keychain.get(.fireworks) == nil ? "Add a Fireworks key first" : "Loading models… (reopen this menu)",
+                                  action: nil, keyEquivalent: "")
+            note.isEnabled = false
+            menu.addItem(note)
+            if Keychain.get(.fireworks) != nil { Task { await host.brain.loadModels() } }
+        }
+        for model in models {
+            let m = item(model.name, #selector(setFireworksModel(_:)))
+            m.representedObject = model.id
+            m.state = picked == model.id ? .on : .off
+            menu.addItem(m)
+        }
+        if let picked, !models.contains(where: { $0.id == picked }) {
+            let m = item(picked.components(separatedBy: "/").last ?? picked, #selector(setFireworksModel(_:)))
+            m.representedObject = picked
+            m.state = .on
+            menu.addItem(m)
+        }
+        return menu
     }
 
     /// Menu item that shows its global shortcut (⌃⌥ + key) when given one.

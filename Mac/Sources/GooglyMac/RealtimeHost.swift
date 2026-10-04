@@ -27,9 +27,28 @@ final class RealtimeHost {
 
     private var engine: CursorEngine { overlay.view.engine }
 
+    /// His brain when Fireworks is picked instead of OpenAI (the Mac listens and thinks; the phone is the face).
+    private(set) lazy var brain = FireworksBrain(host: self)
+
     /// Handles a request from the phone. `reply` sends a packet back to that phone.
     func handle(_ packet: Packet, reply: @escaping (Packet) -> Void) {
         switch packet.command {
+        case "realtimeToken" where Settings.shared.brain == .fireworks:
+            // No realtime session on the phone: tell it the Mac is doing the listening and thinking.
+            brain.begin { [weak self] problem in
+                if let problem {
+                    reply(Packet(command: "realtimeToken", callID: packet.callID))
+                    self?.showCaption(problem, for: 8)
+                } else {
+                    reply(Packet(command: "macBrain", callID: packet.callID))
+                }
+            }
+        case "askStart":
+            brain.askStart()
+        case "askEnd":
+            brain.askEnd()
+        case "sayHi":
+            brain.sayHi()
         case "realtimeToken":
             Task { @MainActor in
                 do {
@@ -104,6 +123,7 @@ final class RealtimeHost {
         engine.brainMood = nil
         engine.gazeOverride = nil  // his eyes follow your mouse while he listens
         if !on {
+            brain.end()
             queue = []
             stopChoreography()
             overlay.goHome()
@@ -237,7 +257,18 @@ final class RealtimeHost {
         }
     }
 
+    /// A look at the screen outside his tool calls: the Fireworks brain takes one while you're asking.
+    func lookNow() async -> (text: String, image: String?) {
+        await look(prefix: nil)
+    }
+
     private func look(prefix: String?) async -> (text: String, image: String?) {
+        // Without permission, ScreenCaptureKit waits on the system prompt instead of failing: ask and say so now.
+        guard CGPreflightScreenCaptureAccess() else {
+            CGRequestScreenCaptureAccess()
+            let problem = "I can't see the screen. Screen Recording permission is off for Googly Eyes on the Mac."
+            return (prefix.map { $0 + " " + problem } ?? problem, nil)
+        }
         do {
             let shot = try await ScreenReader.snapshot()
             snapshot = shot
@@ -564,7 +595,7 @@ final class RealtimeHost {
 
     /// Who he is. Editable from the menu bar (Personality…).
     static let defaultPersonality = """
-    You are a small blueberry with big googly eyes who lives on an iPhone under the user's screen and has your own \
+    You are a small blueberry with big googly eyes who lives on a phone under the user's screen and has your own \
     cursor. You're a young British guy: dry, quick-witted, a bit cheeky, British phrasing. You never speak out loud: \
     your replies pop up as a tiny speech bubble, so keep them to one short line, under fifteen words. Answer \
     immediately with the actual answer. Never announce what you're going to do, never recap, never offer more help.

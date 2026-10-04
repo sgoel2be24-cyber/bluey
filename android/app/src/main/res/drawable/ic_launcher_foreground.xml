@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bluey: the blueberry blob with googly eyes, his little crown and nose. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M55.28,30 C72.25,30 86,44.04 86,61.36 C86,74.97 72.82,86 56.56,86 C37.47,86 22,75.47 22,62.48 C22,44.54 36.9,30 55.28,30 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="38" android:startY="33.75"
+                android:endX="70" android:endY="82.25">
+                <item android:offset="0" android:color="#FFA9BCFF" />
+                <item android:offset="0.34" android:color="#FF6C86F5" />
+                <item android:offset="0.68" android:color="#FF4254D6" />
+                <item android:offset="1" android:color="#FF2B2F8F" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#FF1C1F66"
+        android:pathData="M55,26.1 L55.9,27.9 L58.3,27.3 L56.5,29.1 L57.4,30.9 L55,29.7 L52.6,30.9 L53.5,29.1 L51.7,27.3 L54.1,27.9 Z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M36.5,52 a7.5,7.5 0 1,0 15,0 a7.5,7.5 0 1,0 -15,0 Z M56.5,52 a7.5,7.5 0 1,0 15,0 a7.5,7.5 0 1,0 -15,0 Z" />
+    <path android:fillColor="#FF17151F"
+        android:pathData="M41.4,53 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0 Z M61.4,53 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0 Z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M42.6,51.6 a1.2,1.2 0 1,0 2.4,0 a1.2,1.2 0 1,0 -2.4,0 Z M62.6,51.6 a1.2,1.2 0 1,0 2.4,0 a1.2,1.2 0 1,0 -2.4,0 Z" />
+    <path android:fillColor="#FF1C1F66"
+        android:pathData="M51.9,63 a2.6,1.8 0 1,0 5.2,0 a2.6,1.8 0 1,0 -5.2,0 Z" />
+</vector>
